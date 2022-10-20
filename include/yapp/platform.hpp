@@ -1,3 +1,7 @@
+//! @file platform.hpp
+//! @brief Preprocessor definitions to determine things like Windows vs. Unix and 32-bit vs. 64-bit.
+//!
+
 #pragma once
 
 #if defined(_WIN32) || defined(WIN32)
