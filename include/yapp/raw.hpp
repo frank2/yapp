@@ -1,3 +1,12 @@
+//! @file raw.hpp
+//! @brief Raw headers, as seen in the `<windows.h>` include file.
+//!
+//! This header is written in this way to provide a cross-platform ability to access PE headers.
+//! For Windows, defining the raw structures is redundant. Linux, however, needs definitions.
+//! Shoving `<windows.h>` definitions into this header file makes dealing with cross-platform
+//! PE needs a much less painful hassle.
+//!
+
 #pragma once
 
 #include <yapp/platform.hpp>
