@@ -6,7 +6,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 option(YAPP_BUILD_SHARED "Build YAPP as a shared library." OFF)
-option(YAPP_TEST         "Run tests for YAPP."             OFF)
 
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
@@ -28,8 +27,11 @@ target_include_directories(libyapp PUBLIC
   "${PROJECT_SOURCE_DIR}/include"
 )
 
-if (YAPP_TEST)
-  add_executable(testyapp ${PROJECT_SOURCE_DIR}/test/main.cpp)
-  target_link_libraries(testyapp libyapp)
-  add_test(NAME testyapp COMMAND testyapp)
-endif()
+enable_testing()
+add_executable(testyapp ${PROJECT_SOURCE_DIR}/test/main.cpp ${PROJECT_SOURCE_DIR}/test/framework.hpp)
+target_link_libraries(testyapp libyapp)
+target_include_directories(testyapp PUBLIC
+  "${PROJECT_SOURCE_DIR}/test"
+  "${PROJECT_SOURCE_DIR}/include"
+)
+add_test(NAME testyapp COMMAND testyapp)
