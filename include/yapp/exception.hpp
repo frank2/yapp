@@ -92,6 +92,14 @@ namespace yapp
       }
    };
 
+   /// @brief Thrown when an object encounters an unexpected null pointer.
+   ///
+   class NullPointerException : public Exception
+   {
+   public:
+      NullPointerException() : Exception("Encountered an unexpected null pointer.") {}
+   };
+
    /// @brief Thrown when search terms contain all wildcards.
    ///
    class SearchTooBroadException : public Exception
