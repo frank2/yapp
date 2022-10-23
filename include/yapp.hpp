@@ -25,3 +25,4 @@
 #include <yapp/exception.hpp>
 #include <yapp/raw.hpp>
 #include <yapp/slice.hpp>
+#include <yapp/buffer.hpp>
