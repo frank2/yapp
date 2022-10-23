@@ -11,7 +11,13 @@
 //! are valid, and are thus dangerous to use without some awareness of the scope of the pointers
 //! they're using.
 //!
-//! **Note**: One important thing to be aware of is *alignment of data*. This is key to converting between
+//! Remember: the difference between a *Slice* and a *Buffer* is that the buffer *owns the data.* It is
+//! not pointing at some arbitrary location like a slice because the data its pointing to is a vector that
+//! the buffer object contains.
+//!
+//! ## Alignment
+//!
+//! One important thing to be aware of is *alignment of data*. This is key to converting between
 //! slice types. For example, you can convert a 1-byte sized typed slice (e.g., std::uint8_t) into a slice
 //! of 8-byte sized type (e.g., std::uint64_t, so long as you have a multiple of eight bytes in the slice)
 //! because 8 % 1 == 0, but you can't convert a 6-byte size typed slice between a 4-byte size typed slice
@@ -32,10 +38,11 @@
 
 namespace yapp
 {
-   /// @brief A slice of memory, modelled after Rust's slice object.
+   /// @brief A slice of memory, containing a pointer/size pair, modelled after Rust's slice object.
    ///
    /// A slice of memory, denoted by a pointer/size pair. Just like with Rust, this is a typically
    /// unsafe primitive, so be careful how you use it!
+   ///
    template <typename T>
    class Slice
    {
@@ -73,75 +80,193 @@ namespace yapp
       };
          
    protected:
-      /// @brief The pointer making up this slice.
-      ///
-      T *pointer;
-
+      union {
+         const T* c;
+         T* m;
+      } pointer;
+      
       /// @brief The number of elements corresponding to this slice.
       ///
       std::size_t elements;
 
    public:
+      Slice() : elements(0) { this->pointer.c = nullptr; }
       /// @brief Construct a *Slice* object from a given *pointer* and *size*.
       ///
-      Slice(T *pointer, std::size_t elements) : pointer(pointer), elements(elements) {}
+      /// @throw NullPointerException
+      ///
+      Slice(T *pointer, std::size_t elements) : elements(elements) {
+         this->pointer.m = pointer;
+      }
+      /// @brief Construct a *Slice* object from a given const *pointer* and *size*.
+      ///
+      /// ## Undefined behavior
+      ///
+      /// This constructor has the potential to cause undefined behavior if you use non-const functionality with it.
+      /// Only use this constructor if you intend to create a `const Slice<T>` object.
+      ///
+      /// @throw NullPointerException
+      ///
+      Slice(const T *pointer, std::size_t elements) : elements(elements) {
+         this->pointer.c = pointer;
+      }
+      Slice(const Slice &other) : pointer(other.pointer), elements(other.elements) {}
 
       /// @brief Syntactic sugar to make slice objects more like arrays.
       ///
       /// @throw OutOfBoundsException
+      /// @throw NullPointerException
       ///
-      T& operator[](std::size_t index) {
+      inline T& operator[](std::size_t index) {
+         return this->get(index);
+      }
+
+      /// @brief Syntactic sugar to make slice objects more like arrays.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw NullPointerException
+      ///
+      inline const T& operator[](std::size_t index) const {
          return this->get(index);
       }
 
       /// @brief Get the element at the given *index* in the slice.
       ///
       /// @throw OutOfBoundsException
+      /// @throw NullPointerException
       ///
-      T& get(std::size_t index) {
+      inline T& get(std::size_t index) {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
          if (index >= this->elements) { throw OutOfBoundsException(index, this->elements); }
 
-         return *(this->pointer + index);
+         return this->ptr()[index];
       }
+
+      /// @brief Get the const element at the given *index* in the slice.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw NullPointerException
+      ///
+      inline const T& get(std::size_t index) const {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
+         if (index >= this->elements) { throw OutOfBoundsException(index, this->elements); }
+
+         return this->ptr()[index];
+      }
+
+      /// @brief Get the first element in this slice.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw NullPointerException
+      ///
+      inline T& front() {
+         return this->get(0);
+      }
+      
+      /// @brief Get the first element in this slice.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw NullPointerException
+      ///
+      inline const T& front() const {
+         return this->get(0);
+      }
+
+      
+      /// @brief Get the last element in this slice.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw NullPointerException
+      ///
+      inline T& back() {
+         if (this->elements == 0) { throw OutOfBoundsException(0, this->elements); }
+         
+         return this->get(this->elements-1);
+      }
+      
+      /// @brief Get the first element in this slice.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw NullPointerException
+      ///
+      inline const T& back() const {
+         if (this->elements == 0) { throw OutOfBoundsException(0, this->elements); }
+         
+         return this->get(this->elements-1);
+      }
+
+      /// @brief Check whether this slice is empty.
+      ///
+      inline bool empty() { return this->elements == 0; }
 
       /// @brief Get a forward iterator to the beginning of this slice.
       ///
-      Iterator begin() { return Iterator(&this->pointer[0]); }
+      /// @throw NullPointerException
+      ///
+      inline Iterator begin() {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
+         
+         return Iterator(&this->ptr()[0]);
+      }
 
       /// @brief Get the end iterator of this slice.
       ///
       /// To return the end of the slice as a pointer, see *Slice::eob*.
       ///
-      Iterator end() { return Iterator(this->eob()); }
+      /// @throw NullPointerException
+      ///
+      inline Iterator end() { return Iterator(this->eob()); }
 
-      /// @brief Get the end pointer of this slice.
+      /// @brief Get the end pointer of this slice, or "end of buffer."
       ///
       /// To return the end iterator of the slice, see *Slice::end*.
       ///
-      T* eob() { return &this->pointer[this->elements]; }
+      /// @throw NullPointerexception
+      ///
+      inline T* eob() {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
          
+         return &this->ptr()[this->elements];
+      }
+
+      /// @brief Get the const end pointer of this slice, or "end of buffer."
+      ///
+      /// To return the end iterator of the slice, see *Slice::end*.
+      ///
+      /// @throw NullPointerexception
+      ///
+      inline const T* eob() const {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
+         
+         return &this->ptr()[this->elements];
+      }
+
       /// @brief Get the base pointer of this slice.
       ///
-      T* ptr(void) { return this->pointer; }
+      inline T* ptr(void) { return this->pointer.m; }
+      
+      /// @brief Get the const base pointer of this slice.
+      ///
+      inline const T* ptr(void) const { return this->pointer.c; }
 
       /// @brief Get the length of this slice.
       ///
-      std::size_t size(void) { return this->elements; }
+      inline std::size_t size(void) const { return this->elements; }
 
       /// @brief Get the size of an element in this slice.
       ///
-      std::size_t element_size(void) { return sizeof(T); }
+      inline std::size_t element_size(void) const { return sizeof(T); }
 
       /// @brief Get the amount of units of type *U* needed to fill the type of this slice.
       ///
       /// This returns 0 if the given type *U* is larger than the slice type *T*.
       ///
       template <typename U>
-      std::size_t elements_needed() { return sizeof(T) / sizeof(U); }
+      inline std::size_t elements_needed() const { return sizeof(T) / sizeof(U); }
 
       /// @brief Check if this slice aligns with the given size boundary.
       ///
-      bool aligns_with(std::size_t size) {
+      inline bool aligns_with(std::size_t size) const {
          std::size_t smaller = (this->element_size() < size) ? this->element_size() : size;
          std::size_t bigger = (this->element_size() > size) ? this->element_size() : size;
 
@@ -151,7 +276,7 @@ namespace yapp
       /// @brief Check if the given type argument aligns with the slice's element boundaries.
       ///
       template <typename U>
-      bool aligns_with() { return this->aligns_with(sizeof(U)); }
+      inline bool aligns_with() const { return this->aligns_with(sizeof(U)); }
 
       /// @brief Get a pointer into this slice of the given typename *U* at the given *offset*.
       ///
@@ -161,6 +286,7 @@ namespace yapp
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
+      /// @throw NullPointerException
       ///
       template <typename U>
       U* cast_ptr(std::size_t offset)
@@ -173,16 +299,53 @@ namespace yapp
 
          if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
 
-         return reinterpret_cast<U*>(&this->operator[](offset));
+         return reinterpret_cast<U*>(&this->get(offset));
+      }
+
+      /// @brief Get a pointer into this slice of the given typename *U* at the given *offset*.
+      ///
+      /// Note that the *offset* argument is relative to the size of the type of the slice, just like
+      /// an array offset. The argument type must align with the slice type. This is easy for byte slices,
+      /// slightly more complicated for other slices.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      const U* cast_ptr(std::size_t offset) const
+      {
+         if (offset >= this->elements) { throw OutOfBoundsException(offset, this->elements); }
+         if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
+
+         auto this_bytes = this->elements * sizeof(T);
+         auto cast_bytes = offset * sizeof(T) + sizeof(U);
+
+         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
+
+         return reinterpret_cast<U*>(&this->get(offset));
       }
 
       /// @brief Get a reference into this slice of the given typename *U* at the given *offset*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
+      /// @throw NullPointerException
       ///
       template <typename U>
       U& cast_ref(std::size_t offset)
+      {
+         return *this->cast_ptr<U>(offset);
+      }
+
+      /// @brief Get a const reference into this slice of the given typename *U* at the given *offset*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      const U& cast_ref(std::size_t offset) const
       {
          return *this->cast_ptr<U>(offset);
       }
@@ -191,9 +354,13 @@ namespace yapp
       ///
       /// Useful for when you just want the raw bytes of the slice, rather than the individual interpretted elements.
       ///
-      std::vector<std::uint8_t> as_bytes(void) {
+      /// @throw NullPointerException
+      ///
+      std::vector<std::uint8_t> as_bytes(void) const {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
+         
          auto type_size = sizeof(T);
-         auto start = reinterpret_cast<std::uint8_t *>(this->pointer);
+         auto start = reinterpret_cast<std::uint8_t *>(this->ptr());
          auto end = &start[this->elements * type_size];
 
          return std::vector<std::uint8_t>(start, end);
@@ -202,10 +369,12 @@ namespace yapp
       /// @brief Validate that the given *pointer* is within range of this buffer.
       ///
       template <typename U>
-      bool validate_range(U* pointer)
+      bool validate_range(const U* pointer) const
       {
+         if (this->ptr() == nullptr) { return false; }
+         
          auto me = reinterpret_cast<std::uintptr_t>(pointer);
-         auto start = reinterpret_cast<std::uintptr_t>(this->pointer);
+         auto start = reinterpret_cast<std::uintptr_t>(this->ptr());
          auto end = reinterpret_cast<std::uintptr_t>(this->eob());
 
          return (me >= start && me < end);
@@ -214,9 +383,11 @@ namespace yapp
       /// @brief Validate that the given *pointer* is aligned to an element boundary of the slice.
       ///
       template <typename U>
-      bool validate_alignment(U* pointer) {         
+      bool validate_alignment(const U* pointer) const {
+         if (this->ptr() == nullptr) { return false; }
+         
          auto me = reinterpret_cast<std::uintptr_t>(pointer);
-         auto start = reinterpret_cast<std::uintptr_t>(this->pointer);
+         auto start = reinterpret_cast<std::uintptr_t>(this->ptr());
          auto alignment = (me - start) % sizeof(T)
 
          return (alignment == 0);
@@ -226,34 +397,43 @@ namespace yapp
       /// valid in this buffer.
       ///
       template <typename U>
-      bool validate_ptr(U* pointer) { return (this->validate_range(pointer) && this->validate_alignment(pointer)); }
+      bool validate_ptr(const U* pointer) const { return (this->validate_range(pointer) && this->validate_alignment(pointer)); }
 
       /// @brief Convert this slice object into a vector.
       ///
-      std::vector<T> to_vec(void) {
-         return std::vector<T>(this->pointer, this->eob());
+      /// @throw NullPointerException
+      ///
+      std::vector<T> to_vec(void) const {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
+         
+         return std::vector<T>(this->ptr(), this->eob());
       }
 
       /// @brief Save this slice to disk.
       ///
       /// @throw std::ios_base::failure
+      /// @throw NullPointerException
       ///
-      void save(std::string filename) {
+      void save(const std::string &filename) const {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
+         
          std::ofstream fp(filename);
-         auto bytes = reinterpret_cast<char *>(this->pointer);
+         auto bytes = reinterpret_cast<const char *>(this->ptr());
          auto fixed_size = this->elements * sizeof(T);
          fp.write(bytes, fixed_size);
          fp.close();
       }
 
-      /// @brief Create a subslice of this slice at the given *offset* with the given type *U* and *size*.
+      /// @brief Create a const subslice of this slice at the given *offset* with the given type *U* and *size*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      Slice<U> subslice(std::size_t offset, std::size_t size)
+      const Slice<U> subslice(std::size_t offset, std::size_t size) const
       {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
          if (offset >= this->elements) { throw OutOfBoundsException(offset, this->elements); }
          if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
 
@@ -262,16 +442,86 @@ namespace yapp
 
          if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
 
-         return Slice<U>(reinterpret_cast<U*>(&this->pointer[offset]), size);
+         return Slice<U>(reinterpret_cast<const U*>(&this->ptr()[offset]), size);
       }
 
       /// @brief Create a subslice of this slice at the given *offset* and *size*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
+      /// @throw NullPointerException
+      ///
+      const Slice<T> subslice(std::size_t offset, std::size_t size) const {
+         return this->subslice<T>(offset, size);
+      }
+      
+      /// @brief Create a subslice of this slice at the given *offset* with the given type *U* and *size*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      Slice<U> subslice(std::size_t offset, std::size_t size)
+      {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
+         if (offset >= this->elements) { throw OutOfBoundsException(offset, this->elements); }
+         if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
+
+         auto this_bytes = this->elements * sizeof(T);
+         auto cast_bytes = offset * sizeof(T) + sizeof(U) * size;
+
+         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
+
+         return Slice<U>(reinterpret_cast<U*>(&this->ptr()[offset]), size);
+      }
+
+      /// @brief Create a subslice of this slice at the given *offset* and *size*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw NullPointerException
       ///
       Slice<T> subslice(std::size_t offset, std::size_t size) {
          return this->subslice<T>(offset, size);
+      }
+
+      /// @brief Reinterpret the slice as the given type *U*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      Slice<U> reinterpret() {
+         if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
+
+         auto needed = this->elements_needed<U>();
+         auto adjusted_size = (this->size() * sizeof(T)) / sizeof(U);
+
+         if (needed > 0 && adjusted_size % needed != 0) { throw InsufficientDataException<T, U>(this->read<U>(0, adjusted_size)); }
+
+         return this->subslice<U>(0, adjusted_size);
+      }
+
+      /// @brief Reinterpret the slice as the given const type *U*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      const Slice<U> reinterpret() const {
+         if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
+
+         auto needed = this->elements_needed<U>();
+         auto adjusted_size = (this->size() * sizeof(T)) / sizeof(U);
+
+         if (needed > 0 && adjusted_size % needed != 0) { throw InsufficientDataException<T, U>(this->read<U>(0, adjusted_size)); }
+
+         return this->subslice<U>(0, adjusted_size);
       }
 
       /// @brief Read an arbitrary amount of *U* values from the given *offset* into a vector of the given *size*.
@@ -280,10 +530,12 @@ namespace yapp
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      std::vector<U> read(std::size_t offset, std::size_t size)
+      std::vector<U> read(std::size_t offset, std::size_t size) const
       {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
          if (offset >= this->elements) { throw OutOfBoundsException(offset, this->elements); }
          if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
 
@@ -292,8 +544,8 @@ namespace yapp
 
          if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
 
-         return std::vector<U>(reinterpret_cast<U*>(&this->pointer[offset]),
-                               reinterpret_cast<U*>(&this->pointer[cast_bytes / sizeof(T)]));
+         return std::vector<U>(reinterpret_cast<const U*>(&this->ptr()[offset]),
+                               reinterpret_cast<const U*>(&this->ptr()[cast_bytes / sizeof(T)]));
       }
 
       /// @brief Read an arbitrary amount of values from the buffer at the given *offset* with the given *size*.
@@ -302,67 +554,94 @@ namespace yapp
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
+      /// @throw NullPointerException
       ///
-      std::vector<T> read(std::size_t offset, std::size_t size) {
+      std::vector<T> read(std::size_t offset, std::size_t size) const {
          return this->read<T>(offset, size);
       }
 
-      /// @brief Write a vector of *U* items in *data* to the given slice object at the given *offset*.
+      /// @brief Write a slice of *U* items in *data* to the given slice object at the given *offset*.
       ///
       /// Remember that the offset is relative to the size of the type of the slice! Just like array offsets.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void write(std::size_t offset, std::vector<U> &data)
+      void write(std::size_t offset, const Slice<U> &data)
       {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
          if (offset >= this->elements) { throw OutOfBoundsException(offset, this->elements); }
          if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
 
-         auto needed_elements = this->elements_needed<U>();
-         if (needed_elements > 0 && data.size() % needed_elements != 0) {
-            throw InsufficientDataException<T, U>(data);
-         }
-         
+         const auto reinterpretted = data.reinterpret<T>();
          auto this_bytes = this->elements * sizeof(T);
-         auto cast_bytes = offset * sizeof(T) + sizeof(U) * data.size();
+         auto cast_bytes = offset * sizeof(T) + reinterpretted.size() * sizeof(T);
 
          if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
 
-         std::memcpy(&this->pointer[offset], data.data(), data.size() * sizeof(U));
+         std::memcpy(&this->ptr()[offset], reinterpretted.ptr(), reinterpretted.size() * sizeof(T));
       }
 
-      /// @brief Write a vector of slice items of type *T* at the given *offset*.
+      /// @brief Write a slice of items of *data* of type *T* at the given *offset*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void write(std::size_t offset, std::vector<T> &data) {
+      void write(std::size_t offset, const Slice<T> &data) {
          this->write<T>(offset, data);
       }
 
-      /// @brief Write a *slice* of type *U* at the given *offset*.
+      /// @brief Write a *pointer* of the given number of *elements* and type *U* at the given *offset*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void write(std::size_t offset, Slice<U> &slice) {
-         this->write<U>(offset, slice.to_vec());
+      void write(std::size_t offset, const U* pointer, std::size_t elements) {
+         auto slice = Slice<U>(pointer, elements);
+         this->write<U>(offset, slice);
       }
-
-      /// @brief Write a *slice* of the same type at the given *offset*.
+      
+      /// @brief Write a *pointer* of the given number of *elements* and same type as the slice at the given *offset*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void write(std::size_t offset, Slice<T> &slice) {
-         this->write<T>(offset, slice.to_vec());
+      void write(std::size_t offset, const T* pointer, size_t elements) {
+         auto slice = Slice<T>(pointer, elements);
+         this->write<T>(offset, slice);
+      }
+
+      /// @brief Write a *vector* of type *U* at the given *offset*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      void write(std::size_t offset, const std::vector<U> &vector) {
+         this->write<U>(offset, vector.data(), vector.size());
+      }
+
+      /// @brief Write a *vector* of the same type at the given *offset*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      void write(std::size_t offset, const std::vector<T> &vector) {
+         this->write<T>(offset, vector.data(), vector.size());
       }
 
       /// @brief Write a *pointer* of type *U* at the given *offset*.
@@ -370,10 +649,11 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void write(std::size_t offset, U* pointer) {
-         this->write<U>(offset, std::vector<U>(pointer, &pointer[1]));
+      void write(std::size_t offset, const U* pointer) {
+         this->write<U>(offset, pointer, 1);
       }
 
       /// @brief Write a *pointer* of the same type as the slice at the given *offset*.
@@ -381,9 +661,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void write(std::size_t offset, T* pointer) {
-         this->write<T>(offset, pointer);
+      void write(std::size_t offset, const T* pointer) {
+         this->write<T>(offset, pointer, 1);
       }
 
       /// @brief Write a *reference* of type *U* at the given *offset*.
@@ -391,9 +672,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void write(std::size_t offset, U& reference) {
+      void write(std::size_t offset, const U& reference) {
          this->write<U>(offset, &reference);
       }
 
@@ -402,51 +684,81 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void write(std::size_t offset, T& reference) {
+      void write(std::size_t offset, const T& reference) {
          this->write<T>(offset, &reference);
       }
 
-      /// @brief Start the slice with the given vector *data* of type *U*.
+      /// @brief Start the slice with the given slice *data* of type *U*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void start_with(std::vector<U> &data) {
+      void start_with(const Slice<U> &data) {
          this->write<U>(0, data);
       }
 
-      /// @brief Start the slice with the given vector *data* of the same type as the slice.
+      /// @brief Start the slice with the given slice *data* of the same type as the target slice.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void start_with(std::vector<T> &data) {
-         this->write<T>(0, data);
+      void start_with(const Slice<T> &data) {
+         this->write(0, data);
       }
 
-      /// @brief Start the slice with the given *slice* of type *U*.
+      /// @brief Start the slice with the given *pointer* of type *U* of the given number of *elements*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void start_with(Slice<U> &slice) {
+      void start_with(const U* pointer, std::size_t elements) {
+         auto slice = Slice<U>(pointer, elements);
          this->write<U>(0, slice);
       }
 
-      /// @brief Start the slice with the given *slice* of the same type.
+      /// @brief Start the slice with the given *pointer* of the same type as the slice and the given number of *elements*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void start_with(Slice<T> &slice) {
-         this->write<T>(0, slice);
+      void start_with(const T* pointer, std::size_t elements) {
+         auto slice = Slice<T>(pointer, elements);
+         this->write(0, slice);
+      }
+
+      /// @brief Start the slice with the given *vector* of type *U*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      void start_with(const std::vector<U> &vector) {
+         this->write<U>(0, vector.data(), vector.size());
+      }
+
+      /// @brief Start the slice with the given *vector* of the same type.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      void start_with(const std::vector<T> &vector) {
+         this->write(0, vector.data(), vector.size());
       }
 
       /// @brief Start the slice with the given *pointer* of type *U*.
@@ -454,10 +766,11 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void start_with(U* pointer) {
-         this->write<U>(0, pointer);
+      void start_with(const U* pointer) {
+         this->write<U>(0, pointer, 1);
       }
 
       /// @brief Start the slice with the given *pointer* of the same type as the slice.
@@ -465,9 +778,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void start_with(T* pointer) {
-         this->write<T>(0, pointer);
+      void start_with(const T* pointer) {
+         this->write(0, pointer, 1);
       }
 
       /// @brief Start the slice with the given *reference* of type *U*.
@@ -475,9 +789,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void start_with(U& reference) {
+      void start_with(const U& reference) {
          this->write<U>(0, &reference);
       }
 
@@ -486,19 +801,21 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void start_with(T& reference) {
-         this->write<T>(0, &reference);
+      void start_with(const T& reference) {
+         this->write(0, &reference);
       }
 
-      /// @brief End the slice with the given vector *data* of type *U*.
+      /// @brief End the slice with the given slice *data* of type *U*.
       ///
       /// @throw OutOFBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void end_with(std::vector<U> &data)
+      void end_with(const Slice<U> &data)
       {
          if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
          
@@ -509,46 +826,75 @@ namespace yapp
          this->write<U>(offset, data);
       }
 
-      /// @brief End the slice with the given vector *data* of the same type as the slice.
+      /// @brief End the slice with the given slice *data* of the same type as the slice.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void end_with(std::vector<T> &data) {
+      void end_with(const Slice<T> &data) {
          this->end_with<T>(data);
       }
 
-      /// @brief End the slice with the given *slice* of type *U*.
+      /// @brief End the slice with the given *pointer* of type *U* with the given number of *elements*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void end_with(Slice<U> &slice) {
-         this->end_with<U>(slice.to_vec());
+      void end_with(const U* pointer, std::size_t elements) {
+         auto slice = Slice<U>(pointer, elements);
+         this->end_with<U>(slice);
       }
 
-      /// @brief End the slice with the given *slice* of the same type as the target slice.
+      /// @brief End the slice with the given *pointer* and number of *elements* of the same type as the target slice.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void end_with(Slice<T> &slice) {
-         this->end_with<T>(slice.to_vec());
+      void end_with(const T* pointer, std::size_t elements) {
+         auto slice = Slice<T>(pointer, elements);
+         this->end_with(slice);
       }
 
+      /// @brief End the slice with the given *vector* of type *U*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      void end_with(const std::vector<U> &vector) {
+         this->end_with<U>(vector.data(), vector.size());
+      }
+
+      /// @brief End the slice with the given *vector* of the same type as the target slice.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      void end_with(const std::vector<T> &vector) {
+         this->end_with(vector.data(), vector.size());
+      }
+      
       /// @brief End the slice with the given *pointer* of type *U*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void end_with(U* pointer) {
-         this->end_with<U>(std::vector<U>(pointer, &pointer[1]));
+      void end_with(const U* pointer) {
+         this->end_with<U>(pointer, 1);
       }
 
       /// @brief End the slice with the given *pointer* of the same type as the target slice.
@@ -556,9 +902,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void end_with(T* pointer) {
-         this->end_with<T>(std::vector<T>(pointer, &pointer[1]));
+      void end_with(const T* pointer) {
+         this->end_with(pointer, 1);
       }
 
       /// @brief End the slice with the given *reference* of type *U*.
@@ -566,9 +913,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      void end_with(U& reference) {
+      void end_with(const U& reference) {
          this->end_with<U>(&reference);
       }
 
@@ -577,40 +925,35 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      void end_with(T& reference) {
+      void end_with(const T& reference) {
          this->end_with<T>(&reference);
       }
 
-      /// @brief Search for the given vector *term* in the data of type *U* in the slice.
+      /// @brief Search for the given slice *term* of type *U* in the target slice.
       ///
       /// Returns a vector of offsets to where the search term was found.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      std::vector<std::size_t> search(std::vector<U> &term)
+      std::vector<std::size_t> search(const Slice<U> &term) const
       {
          if (!this->aligns_with<U>()) { throw AlignmentException<T, U>(); }
 
-         auto needed_elements = this->elements_needed<U>();
+         const auto reinterpretted = term.reinterpret<T>();
          
-         if (needed_elements > 0 && term.size() % needed_elements != 0)
-         {
-            throw InsufficientDataException<T, U>(term);
-         }                  
-          
-         auto local_term_size = (term.size() * sizeof(U)) / sizeof(T);
-         auto term_slice = Slice<T>(reinterpret_cast<T*>(term.data()), local_term_size);
-         if (term_slice.size() > this->size()) { throw OutOfBoundsException(term_slice.size(), this->size()); }
+         if (reinterpretted.size() > this->size()) { throw OutOfBoundsException(reinterpretted.size(), this->size()); }
          
          auto potential_offsets = std::vector<std::size_t>();
 
-         for (std::size_t i=0; i<=(this->size()-term_slice.size()); ++i)
+         for (std::size_t i=0; i<=(this->size()-reinterpretted.size()); ++i)
          {
-            if (this->get(i) == term_slice[0])
+            if (this->get(i) == reinterpretted[0])
             {
                potential_offsets.push_back(i);
             }
@@ -628,9 +971,9 @@ namespace yapp
             bool found = true;
 
             /* we do this instead of std::memcmp because we want to hit potential operator== functions. */
-            for (std::size_t i=1; i<term_slice.size(); ++i)
+            for (std::size_t i=1; i<reinterpretted.size(); ++i)
             {
-               if (this->get(offset+i) != term_slice[i])
+               if (this->get(offset+i) != reinterpretted[i])
                {
                   found = false;
                   break;
@@ -643,41 +986,73 @@ namespace yapp
          return result;
       }
 
-      /// @brief Search for the given vector *term* of the same type as the target slice.
+      /// @brief Search for the given slice *term* of the same type as the target slice.
       ///
       /// Returns a vector of offsets where the search term was found.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      std::vector<std::size_t> search(std::vector<T> &term) {
+      std::vector<std::size_t> search(const Slice<T> &term) const {
          return this->search<T>(term);
       }
 
-      /// @brief Search for the given slice *term* of type *U* in the target slice.
+      /// @brief Search for the given *pointer* of type *U* with the given *elements* in the target slice.
       ///
       /// Returns a series of offsets that match the search term.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      std::vector<std::size_t> search(Slice<U> &term) {
-         return this->search<U>(term.to_vec());
+      std::vector<std::size_t> search(const U* pointer, std::size_t elements) const {
+         const auto slice = Slice<U>(pointer, elements);
+         return this->search<U>(slice);
       }
 
-      /// @brief Search for the given slice *term* of the same type as the target slice.
+      /// @brief Search for the given *pointer* of the same type of this slice with the given number of *elements*.
       ///
       /// Returns a series of offsets that match the search term.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      std::vector<std::size_t> search(Slice<T> &term) {
-         return this->search<T>(term.to_vec());
+      std::vector<std::size_t> search(const T* pointer, std::size_t elements) const {
+         auto slice = Slice<T>(pointer, elements);
+         return this->search(slice);
+      }
+
+      /// @brief Search for the given vector *term* of type *U* in the target slice.
+      ///
+      /// Returns a series of offsets that match the search term.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      std::vector<std::size_t> search(const std::vector<U> &term) const {
+         return this->search<U>(term.data(), term.size());
+      }
+
+      /// @brief Search for the given vector *term* of the same type as the target slice.
+      ///
+      /// Returns a series of offsets that match the search term.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      std::vector<std::size_t> search(const std::vector<T> &term) const {
+         return this->search(term.data(), term.size());
       }
 
       /// @brief Search for the given *pointer* of type *U* in the target slice.
@@ -687,10 +1062,11 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      std::vector<std::size_t> search(U* pointer) {
-         return this->search<U>(std::vector<U>(pointer, &pointer[1]));
+      std::vector<std::size_t> search(const U* pointer) const {
+         return this->search<U>(pointer, 1);
       }
 
       /// @brief Search for the given *pointer* of the same type of this slice.
@@ -700,9 +1076,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      std::vector<std::size_t> search(T* pointer) {
-         return this->search<T>(std::vector<T>(pointer, &pointer[1]));
+      std::vector<std::size_t> search(const T* pointer) const {
+         return this->search(pointer, 1);
       }
 
       /// @brief Search for the given *reference* of type *U* in this slice.
@@ -712,9 +1089,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      std::vector<std::size_t> search(U& reference) {
+      std::vector<std::size_t> search(const U& reference) const {
          return this->search<U>(&reference);
       }
 
@@ -725,34 +1103,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      std::vector<std::size_t> search(T& reference) {
-         return this->search<T>(&reference);
-      }
-
-      /// @brief Search for the given *value* of type *U* in the given slice.
-      ///
-      /// Returns a series of offsets that match the search term.
-      ///
-      /// @throw OutOfBoundsException
-      /// @throw AlignmentException
-      /// @throw InsufficientDataException
-      ///
-      template <typename U>
-      std::vector<std::size_t> search(U value) {
-         return this->search<U>(&value);
-      }
-
-      /// @brief Search for the given *value* of the same type as the slice.
-      ///
-      /// Returns a series of offsets that match the search term.
-      ///
-      /// @throw OutOfBoundsException
-      /// @throw AlignmentException
-      /// @throw InsufficientDataException
-      ///
-      std::vector<std::size_t> search(T value) {
-         return this->search<T>(&value);
+      std::vector<std::size_t> search(const T& reference) const {
+         return this->search(&reference);
       }
 
       /// @brief Search for the given *term* of the same type as the slice with optional wildcards.
@@ -760,13 +1114,16 @@ namespace yapp
       /// Using a vector of std::optional<*T*>, we can use std::nullopt as a wildcard pattern for
       /// searching. However, unlike the other search counterparts, this can only be done against
       /// the current type: a given vector search term cannot be converted between type bases in
-      /// a dynamic search.
+      /// a dynamic search due to the fact that the wildcard can't be converted between types.
       ///
       /// Returns a vector of a pair: an offset and the vector which matched the term.
       ///
       /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      DynamicSearchResult search_dynamic(DynamicSearchTerm &term)
+      DynamicSearchResult search_dynamic(DynamicSearchTerm &term) const
       {
          if (term.size() > this->size()) { throw OutOfBoundsException(term.size(), this->size()); }
          
@@ -776,7 +1133,7 @@ namespace yapp
          {
             if (!term[i].has_value()) { ++shift; continue; }
             
-            // we found a value, we found our shift point
+            // we found a value, so we found our shift point
             break;
          }
 
@@ -821,46 +1178,73 @@ namespace yapp
          return result;
       }
 
-      /// @brief Check if this slice contains the given vector *data* of type *U*.
+      /// @brief Check if this slice contains the given slice *data* of type *U*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      bool contains(std::vector<U> &data) {
+      bool contains(const Slice<U> &data) const {
          return this->search<U>(data).size() > 0;
       }
 
-      /// @brief Check if this slice contains the given vector *data* of the same type of the slice.
+      /// @brief Check if this slice contains the given slice *data* of the same type of the slice.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      bool contains(std::vector<T> &data) {
-         return this->search<T>(data).size() > 0;
+      bool contains(const Slice<T> &data) const {
+         return this->search(data).size() > 0;
       }
 
-      /// @brief Check if this slice contains the given *slice* of type *U*.
+      /// @brief Check if the given *pointer* of type *U* with the given number of *elements* is contained within the slice.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      bool contains(Slice<U> &slice) {
-         return this->search<U>(slice).size() > 0;
+      bool contains(const U* pointer, std::size_t elements) const {
+         return this->search<U>(pointer, elements).size() > 0;
       }
-      
-      /// @brief Check if this slice contains the given *slice* of the same data type.
+
+      /// @brief Check if the given *pointer* of the same type as the slice with the given number of *elements* is contained within the slice.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      bool contains(Slice<T> &slice) {
-         return this->search<T>(slice).size() > 0;
+      bool contains(const T* pointer, std::size_t elements) const {
+         return this->search<T>(pointer, elements).size() > 0;
+      }
+
+      /// @brief Check if this slice contains the given *vector* of type *U*.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      template <typename U>
+      bool contains(const std::vector<U> &vector) const {
+         return this->search<U>(vector.data(), vector.size()).size() > 0;
+      }
+      
+      /// @brief Check if this slice contains the given *vector* of the same data type.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw AlignmentException
+      /// @throw InsufficientDataException
+      /// @throw NullPointerException
+      ///
+      bool contains(const std::vector<T> &vector) const {
+         return this->search(vector.data(), vector.size()).size() > 0;
       }
 
       /// @brief Check if the given *pointer* of type *U* is contained within the slice.
@@ -868,9 +1252,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      bool contains(U* pointer) {
+      bool contains(const U* pointer) const {
          return this->search<U>(pointer).size() > 0;
       }
 
@@ -879,9 +1264,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      bool contains(T* pointer) {
-         return this->search<T>(pointer).size() > 0;
+      bool contains(const T* pointer) const {
+         return this->search(pointer).size() > 0;
       }
       
       /// @brief Check if the given *reference* of type *U* is contained within the slice.
@@ -889,9 +1275,10 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
       template <typename U>
-      bool contains(U& reference) {
+      bool contains(const U& reference) const {
          return this->search<U>(&reference).size() > 0;
       }
 
@@ -900,31 +1287,50 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      bool contains(T& reference) {
-         return this->search<T>(&reference).size() > 0;
+      bool contains(const T& reference) const {
+         return this->search(&reference).size() > 0;
       }
 
-      /// @brief Check if the given *value* of type *U* is contained within the slice.
+      /// @brief Split the slice in two at the given *midpoint*.
       ///
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
-      /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      template <typename U>
-      bool contains(U value) {
-         return this->search<U>(&value).size() > 0;
+      std::pair<Slice<T>, Slice<T>> split_at(std::size_t midpoint) const {
+         if (midpoint > this->elements) { throw OutOfBoundsException(midpoint, this->elements); }
+
+         auto left = this->subslice(0, midpoint);
+         auto right = this->subslice(midpoint, this->elements-midpoint);
+
+         return std::make_pair(left, right);
       }
-      
-      /// @brief Check if the given *value* of the same type as the slice is contained within the slice.
+
+      /// @brief Swap two values at offsets *left* and *right*.
       ///
       /// @throw OutOfBoundsException
-      /// @throw AlignmentException
-      /// @throw InsufficientDataException
+      /// @throw NullPointerException
       ///
-      bool contains(T value) {
-         return this->search<T>(&value).size() > 0;
+      void swap(std::size_t left, std::size_t right) {
+         if (left == right) { return; }
+
+         auto& temp = this->get(left);
+         this->get(left) = this->get(right);
+         this->get(right) = temp;
+      }
+
+      /// @brief Reverse the order of the elements of this slice.
+      ///
+      /// @throw OutOfBoundsException
+      /// @throw NullPointerException
+      ///
+      void reverse() {
+         if (this->elements == 0) { return; }
+
+         for (std::size_t i=0; i<(this->elements/2); ++i)
+            this->swap(i, this->elements-i-1);
       }
    };
 }
-      
