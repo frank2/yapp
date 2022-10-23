@@ -49,5 +49,14 @@
       LOG_FAILURE("The wrong exception occurred: " << e_failure.what()); \
       result += 1;\
    }\
-   
-   
+
+#define ASSERT_SUCCESS(statement) \
+   try { \
+      (statement);\
+      LOG_SUCCESS(#statement << ": NO EXCEPTION");\
+   }\
+   catch (std::exception &e) {                   \
+      LOG_FAILURE(#statement << ": EXCEPTED");\
+      LOG_FAILURE("Got exception: " << e.what());\
+      result += 1;\
+   }\
