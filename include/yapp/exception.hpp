@@ -50,7 +50,7 @@ namespace yapp
 
    /// @brief Thrown when a given slice object does not align with a given type.
    ///
-   template <typename T, typename U>
+   template <typename T, typename U=T>
    class AlignmentException : public Exception
    {
    public:
@@ -61,6 +61,14 @@ namespace yapp
                 << ") and " << typeid(U).name()
                 << " (size " << sizeof(U)
                 << ") do not align with one another.";
+
+         this->error = stream.str();
+      }
+      AlignmentException(std::size_t bytes) : Exception() {
+         std::stringstream stream;
+         stream << "Byte offset " << bytes
+                << " did not align with " << typeid(T).name()
+                << " (size " << sizeof(T) << ")";
 
          this->error = stream.str();
       }
@@ -106,6 +114,35 @@ namespace yapp
    {
    public:
       SearchTooBroadException() : Exception("The given search term was too broad; search terms cannot be all wildcards.") {}
+    };
+
+   /// @brief Thrown when a header allocation is insufficient compared to the header.
+   ///
+   class InsufficientAllocationException : public Exception
+   {
+   public:
+      std::size_t attempted, needed;
+
+      InsufficientAllocationException(std::size_t attempted, std::size_t needed)
+         : attempted(attempted),
+           needed(needed),
+           Exception()
+      {
+         std::stringstream stream;
+
+         stream << "The allocation size was insufficient: got " << this->attempted
+                << " bytes, but needed at least " << this->needed;
+
+         this->error = stream.str();
+      }
+   };
+
+   /// @brief Thrown when the memory object isn't managed.
+   ///
+   class NotAllocatedException : public Exception
+   {
+   public:
+      NotAllocatedException() : Exception("The memory object is not allocated.") {}
    };
    
 #ifdef YAPP_WIN32
