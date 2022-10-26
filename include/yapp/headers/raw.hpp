@@ -20,12 +20,24 @@
 
 namespace yapp
 {
+namespace headers
+{
+namespace raw
+{
    /* first, define the constants */
    
 #ifdef YAPP_WIN32
    /* to properly get the win32 header constants into our namespace, we need to undefine the preprocessor definitions and reinsert them as
       namespace consts */
-   
+
+#undef IMAGE_DOS_SIGNATURE
+#undef IMAGE_OS2_SIGNATURE
+#undef IMAGE_OS2_SIGNATURE_LE  
+#undef IMAGE_VXD_SIGNATURE
+#undef IMAGE_NT_SIGNATURE
+#undef IMAGE_NT_OPTIONAL_HDR32_MAGIC 
+#undef IMAGE_NT_OPTIONAL_HDR64_MAGIC 
+#undef IMAGE_ROM_OPTIONAL_HDR_MAGIC  
 #undef IMAGE_FILE_MACHINE_UNKNOWN    
 #undef IMAGE_FILE_MACHINE_TARGET_HOST
 #undef IMAGE_FILE_MACHINE_I386       
@@ -166,9 +178,47 @@ namespace yapp
 #undef IMAGE_DEBUG_TYPE_ILTCG                  
 #undef IMAGE_DEBUG_TYPE_MPX                    
 #undef IMAGE_DEBUG_TYPE_REPRO                  
-#undef IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS  
+#undef IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS
+
+#undef IMAGE_SUBSYSTEM_UNKNOWN          
+#undef IMAGE_SUBSYSTEM_NATIVE           
+#undef IMAGE_SUBSYSTEM_WINDOWS_GUI      
+#undef IMAGE_SUBSYSTEM_WINDOWS_CUI      
+#undef IMAGE_SUBSYSTEM_OS2_CUI          
+#undef IMAGE_SUBSYSTEM_POSIX_CUI        
+#undef IMAGE_SUBSYSTEM_NATIVE_WINDOWS   
+#undef IMAGE_SUBSYSTEM_WINDOWS_CE_GUI   
+#undef IMAGE_SUBSYSTEM_EFI_APPLICATION  
+#undef IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER
+#undef IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER   
+#undef IMAGE_SUBSYSTEM_EFI_ROM             
+#undef IMAGE_SUBSYSTEM_XBOX                
+#undef IMAGE_SUBSYSTEM_WINDOWS_BOOT_APPLICATION
+#undef IMAGE_SUBSYSTEM_XBOX_CODE_CATALOG
+
+#undef IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
+#undef IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+#undef IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY
+#undef IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+#undef IMAGE_DLLCHARACTERISTICS_NO_ISOLATION
+#undef IMAGE_DLLCHARACTERISTICS_NO_SEH
+#undef IMAGE_DLLCHARACTERISTICS_NO_BIND
+#undef IMAGE_DLLCHARACTERISTICS_APPCONTAINER
+#undef IMAGE_DLLCHARACTERISTICS_WDM_DRIVER
+#undef IMAGE_DLLCHARACTERISTICS_GUARD_CF
+#undef IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE
 #endif
 
+   const std::uint16_t IMAGE_DOS_SIGNATURE =               0x5A4D;      // MZ
+   const std::uint16_t IMAGE_OS2_SIGNATURE =               0x454E;      // NE
+   const std::uint16_t IMAGE_OS2_SIGNATURE_LE =            0x454C;      // LE
+   const std::uint16_t IMAGE_VXD_SIGNATURE =               0x454C;      // LE
+   const std::uint32_t IMAGE_NT_SIGNATURE =                0x00004550;  // PE00
+
+   const std::uint16_t IMAGE_NT_OPTIONAL_HDR32_MAGIC =    0x10b;
+   const std::uint16_t IMAGE_NT_OPTIONAL_HDR64_MAGIC =    0x20b;
+   const std::uint16_t IMAGE_ROM_OPTIONAL_HDR_MAGIC =     0x107;
+   
    const std::uint16_t IMAGE_FILE_MACHINE_UNKNOWN =         0;
    const std::uint16_t IMAGE_FILE_MACHINE_TARGET_HOST =     0x0001;  // Useful for indicating we want to interact with the host and not a WoW guest.
    const std::uint16_t IMAGE_FILE_MACHINE_I386 =            0x014c;  // Intel 386.
@@ -311,17 +361,91 @@ namespace yapp
    const std::uint32_t IMAGE_DEBUG_TYPE_REPRO =                16;
    const std::uint32_t IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS =20;
 
+   const std::uint16_t IMAGE_SUBSYSTEM_UNKNOWN =            0;   // Unknown subsystem.
+   const std::uint16_t IMAGE_SUBSYSTEM_NATIVE =             1;   // Image doesn't require a subsystem.
+   const std::uint16_t IMAGE_SUBSYSTEM_WINDOWS_GUI =        2;   // Image runs in the Windows GUI subsystem.
+   const std::uint16_t IMAGE_SUBSYSTEM_WINDOWS_CUI =        3;   // Image runs in the Windows character subsystem.
+   const std::uint16_t IMAGE_SUBSYSTEM_OS2_CUI =            5;   // image runs in the OS/2 character subsystem.
+   const std::uint16_t IMAGE_SUBSYSTEM_POSIX_CUI =          7;   // image runs in the Posix character subsystem.
+   const std::uint16_t IMAGE_SUBSYSTEM_NATIVE_WINDOWS =     8;   // image is a native Win9x driver.
+   const std::uint16_t IMAGE_SUBSYSTEM_WINDOWS_CE_GUI =     9;   // Image runs in the Windows CE subsystem.
+   const std::uint16_t IMAGE_SUBSYSTEM_EFI_APPLICATION =    10;  //
+   const std::uint16_t IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER=11;   //
+   const std::uint16_t IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER = 12;  //
+   const std::uint16_t IMAGE_SUBSYSTEM_EFI_ROM =            13;
+   const std::uint16_t IMAGE_SUBSYSTEM_XBOX =               14;
+   const std::uint16_t IMAGE_SUBSYSTEM_WINDOWS_BOOT_APPLICATION=16;
+   const std::uint16_t IMAGE_SUBSYSTEM_XBOX_CODE_CATALOG =  17;
+
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA =  0x0020;  // Image can handle a high entropy 64-bit virtual address space.
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE=0x0040;     // DLL can move.
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY =  0x0080;     // Code Integrity Image
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_NX_COMPAT =  0x0100;     // Image is NX compatible
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_NO_ISOLATION=0x0200;     // Image understands isolation and doesn't want it
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_NO_SEH =     0x0400;     // Image does not use SEH.  No SE handler may reside in this image
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_NO_BIND =    0x0800;     // Do not bind this image.
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_APPCONTAINER=0x1000;     // Image should execute in an AppContainer
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_WDM_DRIVER = 0x2000;     // Driver uses WDM model
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_GUARD_CF =   0x4000;     // Image supports Control Flow Guard.
+   const std::uint16_t IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE =   0x8000;
+
    /* next, define the structures */
 
 #ifdef YAPP_WIN32
    using IMAGE_DOS_HEADER = IMAGE_DOS_HEADER;
    using IMAGE_FILE_HEADER = IMAGE_FILE_HEADER;
    using IMAGE_DATA_DIRECTORY = IMAGE_DATA_DIRECTORY;
+   #ifdef YAPP_64BIT
    using IMAGE_OPTIONAL_HEADER32 = IMAGE_OPTIONAL_HEADER32;
    using IMAGE_OPTIONAL_HEADER64 = IMAGE_OPTIONAL_HEADER64;
+   #else
+   using IMAGE_OPTIONAL_HEADER32 = IMAGE_OPTIONAL_HEADER;
+   struct IMAGE_OPTIONAL_HEADER64 {
+      std::uint16_t Magic;
+      std::uint8_t MajorLinkerVersion;
+      std::uint8_t MinorLinkerVersion;
+      std::uint32_t SizeOfCode;
+      std::uint32_t SizeOfInitializedData;
+      std::uint32_t SizeOfUninitializedData;
+      std::uint32_t AddressOfEntryPoint;
+      std::uint32_t BaseOfCode;
+      std::uint64_t ImageBase;
+      std::uint32_t SectionAlignment;
+      std::uint32_t FileAlignment;
+      std::uint16_t MajorOperatingSystemVersion;
+      std::uint16_t MinorOperatingSystemVersion;
+      std::uint16_t MajorImageVersion;
+      std::uint16_t MinorImageVersion;
+      std::uint16_t MajorSubsystemVersion;
+      std::uint16_t MinorSubsystemVersion;
+      std::uint32_t Win32VersionValue;
+      std::uint32_t SizeOfImage;
+      std::uint32_t SizeOfHeaders;
+      std::uint32_t CheckSum;
+      std::uint16_t Subsystem;
+      std::uint16_t DllCharacteristics;
+      std::uint64_t SizeOfStackReserve;
+      std::uint64_t SizeOfStackCommit;
+      std::uint64_t SizeOfHeapReserve;
+      std::uint64_t SizeOfHeapCommit;
+      std::uint32_t LoaderFlags;
+      std::uint32_t NumberOfRvaAndSizes;
+      IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
+   };
+   #endif
    using IMAGE_OPTIONAL_HEADER = IMAGE_OPTIONAL_HEADER;
+   #ifdef YAPP_64BIT
    using IMAGE_NT_HEADERS32 = IMAGE_NT_HEADERS32;
    using IMAGE_NT_HEADERS64 = IMAGE_NT_HEADERS64;
+   #else
+   using IMAGE_NT_HEADERS32 = IMAGE_NT_HEADERS;
+
+   struct IMAGE_NT_HEADERS64 {
+      std::uint32_t Signature;
+      IMAGE_FILE_HEADER FileHeader;
+      IMAGE_OPTIONAL_HEADER64 OptionalHeader;
+   };
+   #endif
    using IMAGE_NT_HEADERS = IMAGE_NT_HEADERS;
    using IMAGE_SECTION_HEADER = IMAGE_SECTION_HEADER;
    using IMAGE_EXPORT_DIRECTORY = IMAGE_EXPORT_DIRECTORY;
@@ -334,8 +458,27 @@ namespace yapp
    using IMAGE_RESOURCE_DIR_STRING_U = IMAGE_RESOURCE_DIR_STRING_U;
    using IMAGE_RESOURCE_DATA_ENTRY = IMAGE_RESOURCE_DATA_ENTRY;
    using IMAGE_DEBUG_DIRECTORY = IMAGE_DEBUG_DIRECTORY;
+   #ifdef YAPP_64BIT
    using IMAGE_TLS_DIRECTORY32 = IMAGE_TLS_DIRECTORY32;
    using IMAGE_TLS_DIRECTORY64 = IMAGE_TLS_DIRECTORY64;
+   #else
+   using IMAGE_TLS_DIRECTORY32 = IMAGE_TLS_DIRECTORY;
+   struct IMAGE_TLS_DIRECTORY64 {
+      std::uint64_t StartAddressOfRawData;
+      std::uint64_t EndAddressOfRawData;
+      std::uint64_t AddressOfIndex;         // Pstd::uint32_t
+      std::uint64_t AddressOfCallBacks;     // PIMAGE_TLS_CALLBACK *;
+      std::uint32_t SizeOfZeroFill;
+      union {
+         std::uint32_t Characteristics;
+         struct {
+            std::uint32_t Reserved0 : 20;
+            std::uint32_t Alignment : 4;
+            std::uint32_t Reserved1 : 8;
+         } DUMMYSTRUCTNAME;
+      } DUMMYUNIONNAME;
+   };
+   #endif
    using IMAGE_TLS_DIRECTORY = IMAGE_TLS_DIRECTORY;
 #else
    struct IMAGE_DOS_HEADER
@@ -381,7 +524,7 @@ namespace yapp
       // Standard fields.
       //
 
-      std::uint8_t Magic;
+      std::uint16_t Magic;
       std::uint8_t MajorLinkerVersion;
       std::uint8_t MinorLinkerVersion;
       std::uint32_t SizeOfCode;
@@ -419,7 +562,6 @@ namespace yapp
       IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
    };
 
-#ifdef YAPP_64BIT
    struct IMAGE_OPTIONAL_HEADER64 {
       std::uint16_t Magic;
       std::uint8_t MajorLinkerVersion;
@@ -452,7 +594,6 @@ namespace yapp
       std::uint32_t NumberOfRvaAndSizes;
       IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
    };
-#endif
 
    #ifdef YAPP_64BIT
    using IMAGE_OPTIONAL_HEADER = IMAGE_OPTIONAL_HEADER64;
@@ -460,13 +601,11 @@ namespace yapp
    using IMAGE_OPTIONAL_HEADER = IMAGE_OPTIONAL_HEADER32;
    #endif
 
-#ifdef YAPP_64BIT
    struct IMAGE_NT_HEADERS64 {
       std::uint32_t Signature;
       IMAGE_FILE_HEADER FileHeader;
       IMAGE_OPTIONAL_HEADER64 OptionalHeader;
    };
-#endif
    
    struct IMAGE_NT_HEADERS32 {
       std::uint32_t Signature;
@@ -606,7 +745,6 @@ namespace yapp
       } DUMMYUNIONNAME;
    };
 
-#ifdef YAPP_64BIT
    struct IMAGE_TLS_DIRECTORY64 {
       std::uint64_t StartAddressOfRawData;
       std::uint64_t EndAddressOfRawData;
@@ -622,7 +760,6 @@ namespace yapp
          } DUMMYSTRUCTNAME;
       } DUMMYUNIONNAME;
    };
-#endif
 
    #ifdef YAPP_64BIT
    using IMAGE_TLS_DIRECTORY = IMAGE_TLS_DIRECTORY64;
@@ -630,4 +767,4 @@ namespace yapp
    using IMAGE_TLS_DIRECTORY = IMAGE_TLS_DIRECTORY32;
    #endif
 #endif
-}
+}}}
