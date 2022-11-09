@@ -29,7 +29,13 @@
 
 #include <cstring>
 #include <fstream>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,18 +44,183 @@
 
 namespace yapp
 {
+   class MemoryManager
+   {
+   private:
+      using KeyType = std::pair<const void *, std::size_t>;
+      std::map<KeyType, std::size_t> refcount;
+      std::map<KeyType, std::set<KeyType>> children;
+      std::map<KeyType, KeyType> parents;
+      std::mutex mutex;
+
+      static std::unique_ptr<MemoryManager> Instance;
+      
+      MemoryManager() {}
+      
+   public:
+      static MemoryManager &GetInstance() {
+         if (MemoryManager::Instance == nullptr)
+            MemoryManager::Instance = std::unique_ptr<MemoryManager>(new MemoryManager());
+
+         return *MemoryManager::Instance;
+      }
+
+      bool is_valid(const void *ptr, std::size_t size) const {
+         auto key = std::make_pair(ptr, size);
+                                          
+         return this->refcount.find(key) != this->refcount.end() && this->refcount.at(key) > 0;
+      }
+
+      std::size_t ref(const void *ptr, std::size_t size)
+      {
+         auto key = std::make_pair(ptr, size);
+         this->mutex.lock();
+
+         if (this->refcount.find(key) == this->refcount.end())
+         {
+            this->refcount[key] = 0;
+         }
+
+         ++this->refcount.at(key);
+         
+         if (this->parents.find(key) != this->parents.end())
+         {
+            auto parent_key = this->parents.at(key);
+            this->mutex.unlock();
+            this->ref(parent_key.first, parent_key.second);
+            this->mutex.lock();
+         }
+
+         auto count = this->refcount.at(key);
+         this->mutex.unlock();
+         
+         return count;
+      }
+
+      std::size_t deref(const void *ptr, std::size_t size)
+      {
+         auto key = std::make_pair(ptr, size);
+         this->mutex.lock();
+         
+         auto iter = this->refcount.find(key);
+
+         if (iter == this->refcount.end()) {
+            this->mutex.unlock();
+            return 0;
+         }
+                  
+         auto value = --iter->second;
+
+         if (this->parents.find(key) != this->parents.end())
+         {
+            auto parent_key = this->parents.at(key);
+            this->mutex.unlock();
+            this->deref(parent_key.first, parent_key.second);
+         }
+         else { this->mutex.unlock(); }
+         
+         // if this ptr/size pair got dereferenced to 0, it needs to be invalidated
+         if (value == 0)
+            this->invalidate(ptr, size, true);
+
+         return value;
+      }
+
+      void relationship(const void *parent_ptr, std::size_t parent_size, const void *child_ptr, std::size_t child_size)
+      {
+         if (parent_ptr == child_ptr && parent_size == child_size)
+         {
+            // refcount will be increased when the pointer/size pair has its
+            // refcount increased by a constructor
+            return;
+         }
+
+         auto parent_key = std::make_pair(parent_ptr, parent_size);
+         auto child_key = std::make_pair(child_ptr, child_size);
+
+         this->mutex.lock();
+
+         this->parents.insert(std::make_pair(child_key, parent_key));
+
+         if (this->children.find(parent_key) == this->children.end())
+         {
+            this->children.insert(std::make_pair(parent_key, std::set<KeyType>()));
+         }
+
+         this->children.at(parent_key).insert(child_key);
+
+         this->mutex.unlock();
+      }
+
+      void invalidate(const void *ptr, std::size_t size, bool derefed_parent=false) {
+         auto key = std::make_pair(ptr, size);
+
+         this->mutex.lock();
+
+         if (this->refcount.find(key) == this->refcount.end())
+         {
+            this->mutex.unlock();
+            return;
+         }
+                  
+         this->refcount.erase(key);
+
+         if (this->parents.find(key) != this->parents.end())
+         {
+            auto parent_key = this->parents.at(key);
+            auto &children = this->children.at(parent_key);
+
+            if (children.find(key) != children.end())
+               children.erase(key);
+
+            if (!derefed_parent)
+            {
+               this->mutex.unlock();
+               this->deref(parent_key.first, parent_key.second);
+               this->mutex.lock();
+            }
+         }
+
+         if (this->children.find(key) != this->children.end())
+         {
+            // there's a very real possibility that in the chaos
+            // of invalidating and dereferencing memory that
+            // the child set gets erased out from under us, so copy
+            // the set data into a vector.
+            std::vector<KeyType> child_keys(this->children.at(key).begin(), this->children.at(key).end());
+
+            for (auto child_key : child_keys)
+            {
+               this->mutex.unlock();
+               this->invalidate(child_key.first, child_key.second);
+               this->mutex.lock();
+            }
+            
+            this->children.erase(key);
+         }
+
+         this->parents.erase(key);
+         this->mutex.unlock();
+      }
+   };
+            
    /// @brief A slice of memory, containing a pointer/size pair, modelled after Rust's slice object.
    ///
    /// A memory of memory, denoted by a pointer/size pair. Just like with Rust, this is a typically
    /// unsafe primitive, so be careful how you use it!
    ///
-   template <typename T, bool TIsVariadic=false, typename Allocator = std::allocator<std::uint8_t>>
+   template <typename T,
+             bool TIsVariadic=false,
+             typename Allocator = std::allocator<std::uint8_t>>
    class Memory
    {
       static_assert(std::is_same<Allocator::value_type, std::uint8_t>::value,
                     "Allocator does not allocate uint8_t buffers.");
       
    public:
+      /// @brief Access to the base type of this memory class.
+      using BaseType = typename T;
+      
       /// @brief The type used for dynamic search terms.
       ///
       using DynamicSearchTerm = std::vector<std::optional<T>>;
@@ -61,7 +232,7 @@ namespace yapp
       
       /// @brief A forward iterator for a memory object.
       ///
-      class Iterator
+      struct Iterator
       {
          using iterator_category = std::forward_iterator_tag;
          using difference_type = std::ptrdiff_t;
@@ -77,13 +248,38 @@ namespace yapp
          Iterator& operator++() { ++this->ptr; return *this; }
          Iterator& operator++(int) { auto tmp = *this; ++(*this); return tmp; }
 
-         friend bool operator== (const Iterator& a, const Iterator& b) { return a.ptr == b.ptr }
-         friend bool operator!= (const Iterator& a, const Iterator& b) { return a.ptr != b.ptr }
+         friend bool operator== (const Iterator& a, const Iterator& b) { return a.ptr == b.ptr; }
+         friend bool operator!= (const Iterator& a, const Iterator& b) { return a.ptr != b.ptr; }
 
       private:
          T* ptr;
       };
-         
+
+      /// @brief A const forward iterator for a memory object.
+      ///
+      struct ConstIterator
+      {
+         using iterator_category = std::forward_iterator_tag;
+         using difference_type = std::ptrdiff_t;
+         using value_type = const T;
+         using pointer = const T*;
+         using reference = const T&;
+
+         ConstIterator(const T* ptr) : ptr(ptr) {}
+
+         reference operator*() { return *this->ptr; }
+         pointer operator->() { return this->ptr; }
+
+         ConstIterator& operator++() { ++this->ptr; return *this; }
+         ConstIterator& operator++(int) { auto tmp = *this; ++(*this); return tmp; }
+
+         friend bool operator== (const ConstIterator& a, const ConstIterator& b) { return a.ptr == b.ptr; }
+         friend bool operator!= (const ConstIterator& a, const ConstIterator& b) { return a.ptr != b.ptr; }
+
+      private:
+         const T* ptr;
+      };
+
    protected:
       Allocator allocator;
       
@@ -98,12 +294,32 @@ namespace yapp
 
       bool allocated;
 
-      void throw_if_unallocated() { if (!this->pointer.c != nullptr && !this->allocated) { throw NotAllocatedException(); } }
+      void throw_if_unallocated() const { if (this->pointer.c != nullptr && !this->allocated) { throw NotAllocatedException(); } }
+      template <typename U>
+      void throw_if_out_of_bounds(std::size_t offset, std::size_t size, bool size_in_bytes=false) const {
+         if (this->validate_range(offset, size, size_in_bytes)) { return; }
+
+         auto byte_size = size;
+         if (!size_in_bytes) { byte_size *= sizeof(U); }
+
+         auto fixed_offset = offset;
+         if (!size_in_bytes) { fixed_offset *= this->element_size(); }
+
+         auto offending_offset = fixed_offset+byte_size;
+         
+         throw OutOfBoundsException(offending_offset / this->element_size(), this->size());
+      }
 
    public:
-      /// @brief Create a null memory object.
+      /// @brief Create a default memory object, with the option to *allocate* the
+      /// memory to the size of the template type (true) or just create a null
+      /// memory object (false).
       ///
-      Memory() : _size(0), allocator(Allocator()), allocated(false) { this->pointer.c = nullptr; }
+      Memory(bool allocate=false) : _size(0), allocator(Allocator()), allocated(false) {
+         this->pointer.c = nullptr;
+
+         if (allocate) { this->allocate(1); }
+      }
       /// @brief Construct a *Memory* object from a given *pointer* and *size*, with option to *copy*
       /// or interpret the size as bytes (*size_in_bytes*).
       ///
@@ -130,6 +346,26 @@ namespace yapp
       {
          this->pointer.m = nullptr;
          this->set_memory(pointer, size, copy, size_in_bytes);
+      }
+      /// @brief Construct a memory object from a *pointer*.
+      ///
+      /// @throw NullPointerException
+      ///
+      Memory(T *pointer, bool copy=false)
+         : allocator(Allocator()), allocated(false)
+      {
+         this->pointer.m = nullptr;
+         this->set_memory(pointer, 1, copy, false);
+      }
+      /// @brief Contsruct a memory object from a const *pointer*.
+      ///
+      /// @throw NullPointerException
+      ///
+      Memory(const T* pointer, bool copy=false)
+         : allocator(Allocator()), allocated(false)
+      {
+         this->pointer.m = nullptr;
+         this->set_memory(pointer, 1, copy, false);
       }
       /// @brief Construct a memory object from a vector of *data*.
       ///
@@ -163,20 +399,27 @@ namespace yapp
          this->load_file(filename);
       }
 
-      Memory(const Memory &other) : allocator(other.allocator) {
+      Memory(const Memory &other)
+         : allocator(other.allocator),
+           allocated(false),
+           _size(0)
+      {
+         this->pointer.m = nullptr;
+         
          if (other.allocated) {
             this->allocate(other._size, true);
-            this->write<T, other.variadic>(0, other);
+            this->write(0, other);
          }
          else
          {
-            this->pointer = other.pointer;
-            this->_size = other._size;
-            this->allocated = false;
+            this->set_memory(other.pointer.m, other._size, false, true);
          }
       }
       ~Memory() {
+         // deallocate calls invalidate, not deref, because it directly erases the memory
          if (this->allocated) { this->deallocate(); }
+         // an unmanaged pointer gets dereferenced because it might be owned elsewhere
+         else { MemoryManager::GetInstance().deref(this->pointer.c, this->_size); }
       }
 
       /// @brief Syntactic sugar to make memory objects more like arrays.
@@ -197,6 +440,58 @@ namespace yapp
          return this->get(index);
       }
 
+      /// @brief Syntactic sugar to access the underlying type,
+      /// or the first member of the array.
+      ///
+      /// @throw NullPointerException
+      ///
+      inline T* operator->() {
+         auto ptr = this->ptr();
+         
+         if (ptr == nullptr) { throw NullPointerException(); }
+
+         return ptr;
+      }
+
+      /// @brief Syntactic sugar to access the underlying type as const,
+      /// or the first member of the array.
+      ///
+      /// @throw NullPointerException
+      ///
+      inline const T* operator->() const {
+         const auto ptr = this->ptr();
+         
+         if (ptr == nullptr) { throw NullPointerException(); }
+
+         return ptr;
+      }
+      
+      /// @brief Syntactic sugar to access the underlying type as a reference,
+      /// or the first member of the array.
+      ///
+      /// @throw NullPointerException
+      ///
+      inline T& operator*() {
+         auto ptr = this->ptr();
+
+         if (ptr == nullptr) { throw NullPointerException(); }
+
+         return *ptr;
+      }
+      
+      /// @brief Syntactic sugar to access the underlying type as a const reference,
+      /// or the first member of the array.
+      ///
+      /// @throw NullPointerException
+      ///
+      inline const T& operator*() const {
+         const auto ptr = this->ptr();
+
+         if (ptr == nullptr) { throw NullPointerException(); }
+
+         return *ptr;
+      }
+
       /// @brief Set the memory region of this object.
       ///
       /// @throw NullPointerException
@@ -206,9 +501,11 @@ namespace yapp
             this->set_memory(reinterpret_cast<const T*>(pointer), size, true, size_in_bytes);
             return;
          }
-         
+        
          if (pointer == nullptr) { throw NullPointerException(); }
+         
          if (this->allocated) { this->deallocate(); }
+         else { MemoryManager::GetInstance().deref(this->pointer.c, this->_size); }
          
          std::size_t byte_size = size;
          if (!size_in_bytes) { byte_size *= sizeof(T); }
@@ -216,6 +513,8 @@ namespace yapp
          this->pointer.m = pointer;
          this->_size = byte_size;
          this->allocated = false;
+
+         MemoryManager::GetInstance().ref(pointer, byte_size);
       }
 
       /// @brief Set the memory region of this object with a const pointer.
@@ -230,20 +529,24 @@ namespace yapp
       ///
       void set_memory(const T* pointer, std::size_t size, bool copy=false, bool size_in_bytes=false) {
          if (pointer == nullptr) { throw NullPointerException(); }
+         
          if (this->allocated) { this->deallocate(); }
+         else { MemoryManager::GetInstance().deref(this->pointer.c, this->_size); }
          
          std::size_t byte_size = size;
          if (!size_in_bytes) { byte_size *= sizeof(T); }
 
          if (copy)
          {
-            this->allocate(byte_size);
+            this->allocate(byte_size, true);
             this->write(0, pointer, byte_size, true);
          }
          else {
             this->pointer.c = pointer;
             this->_size = byte_size;
             this->allocated = false;
+
+            MemoryManager::GetInstance().ref(pointer, byte_size);
          }
       }
       
@@ -251,6 +554,7 @@ namespace yapp
       /// with optional *initial* value and interpretation of the size as bytes (*size_in_bytes*).
       ///
       /// @throw InsufficientAllocationException
+      /// @throw BadAllocationException
       ///
       void allocate(std::size_t size, bool size_in_bytes = false, std::optional<T> initial = std::nullopt) {
          if (this->allocated) { this->deallocate(); }
@@ -259,9 +563,13 @@ namespace yapp
          if (!size_in_bytes) { byte_size *= sizeof(T); }
          if (byte_size < sizeof(T)) { throw InsufficientAllocationException(byte_size, sizeof(T)); }
                  
-         this->pointer.m = this->allocator.allocate(byte_size);
+         this->pointer.m = reinterpret_cast<T*>(this->allocator.allocate(byte_size));
+         if (this->pointer.m == nullptr) { throw BadAllocationException(); }
+         
          this->_size = byte_size;
          this->allocated = true;
+         
+         MemoryManager::GetInstance().ref(this->pointer.m, byte_size);
 
          if (initial.has_value())
          {
@@ -272,10 +580,14 @@ namespace yapp
 
       /// @brief Deallocate this memory with the given allocator class.
       ///
+      /// @throw NotAllocatedException
+      ///
       void deallocate() {
-         if (!this->allocated) { return; }
+         this->throw_if_unallocated();
 
-         this->allocator.deallocate(this->pointer.m, this->_size);
+         MemoryManager::GetInstance().invalidate(this->pointer.m, this->_size);
+         
+         this->allocator.deallocate(reinterpret_cast<std::uint8_t *>(this->pointer.m), this->_size);
          
          this->pointer.m = nullptr;
          this->_size = 0;
@@ -286,8 +598,14 @@ namespace yapp
       /// to interpret the size as bytes (*size_in_bytes*) or optional *padding* value.
       ///
       /// @throw InsufficientAllocationException
+      /// @throw NotAllocatedException
       ///
       void reallocate(std::size_t size, bool size_in_bytes = false, std::optional<T> padding = std::nullopt) {
+         // throws if pointer is non-null and allocated is false
+         this->throw_if_unallocated();
+
+         // if we get here, we're either non-null and allocated or
+         // null and not allocated, so check if we're allocated
          if (!this->allocated)
          {
             this->allocate(size, size_in_bytes, padding);
@@ -367,7 +685,7 @@ namespace yapp
       inline const T& back() const {
          if (this->elements() == 0) { throw OutOfBoundsException(0, this->elements()); }
          
-         return this->get(this->elements-1);
+         return this->get(this->elements()-1);
       }
 
       /// @brief Check whether this memory is empty.
@@ -388,6 +706,12 @@ namespace yapp
          return Iterator(&this->ptr()[0]);
       }
 
+      inline ConstIterator cbegin() const {
+         if (this->ptr() == nullptr) { throw NullPointerException(); }
+
+         return ConstIterator(&this->ptr()[0]);
+      }
+
       /// @brief Get the end iterator of this memory.
       ///
       /// To return the end of the memory as a pointer, see *Memory::eob*.
@@ -395,6 +719,8 @@ namespace yapp
       /// @throw NullPointerException
       ///
       inline Iterator end() { return Iterator(this->eob()); }
+
+      inline ConstIterator cend() const { return ConstIterator(this->eob()); }
 
       /// @brief Get the end pointer of this memory, or "end of buffer."
       ///
@@ -422,11 +748,25 @@ namespace yapp
 
       /// @brief Get the base pointer of this memory.
       ///
-      inline T* ptr(void) { return this->pointer.m; }
+      inline T* ptr(void) {
+         if (this->pointer.m == nullptr) { return nullptr; }
+
+         if (!MemoryManager::GetInstance().is_valid(this->pointer.c, this->_size))
+            throw InvalidPointerException(this->pointer.c, this->_size);
+         
+         return this->pointer.m;
+      }
       
       /// @brief Get the const base pointer of this memory.
       ///
-      inline const T* ptr(void) const { return this->pointer.c; }
+      inline const T* ptr(void) const {
+         if (this->pointer.c == nullptr) { return nullptr; }
+
+         if (!MemoryManager::GetInstance().is_valid(this->pointer.c, this->_size))
+            throw InvalidPointerException(this->pointer.c, this->_size);
+         
+         return this->pointer.c;
+      }
 
       /// @brief Get the length of this memory region in terms of its base type.
       ///
@@ -524,7 +864,8 @@ namespace yapp
 
          if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements()); }
 
-         return reinterpret_cast<const U*>(&this->get(fixed_offset / sizeof(T)));
+         auto ptr = &this->get(fixed_offset / sizeof(T));
+         return reinterpret_cast<const U*>(ptr);
       }
 
       /// @brief Get a reference into this memory of the given typename *U* at the given *offset*, with the
@@ -553,6 +894,31 @@ namespace yapp
          return *this->cast_ptr<U>(offset, offset_in_bytes);
       }
 
+      /// @brief Validate that the given *offset* and *size* with type *U* is within the bounds of this
+      /// memory region, with the option of interpretting the *size* and *offset* as bytes
+      /// (*size_in_bytes*).
+      ///
+      template <typename U, bool UIsVariadic=false>
+      bool validate_range(std::size_t offset, std::size_t size, bool size_in_bytes=false) const
+      {
+         auto byte_size = size;
+         if (!size_in_bytes) { byte_size *= sizeof(U); }
+
+         auto fixed_offset = offset;
+         if (!size_in_bytes) { fixed_offset *= this->element_size(); }
+
+         return fixed_offset+byte_size <= this->_size;
+      }
+      
+      /// @brief Validate that the given *offset* and *size* of base type *T* is within the bounds of this
+      /// memory region, with the option of interpretting the *size* and *offset* as bytes
+      /// (*size_in_bytes*).
+      ///
+      bool validate_range(std::size_t offset, std::size_t size, bool size_in_bytes=false) const
+      {
+         return this->validate_range<T>(offset, size, size_in_bytes);
+      }
+
       /// @brief Return the memory as a vector of bytes.
       ///
       /// Useful for when you just want the raw bytes of the memory, rather than the individual interpretted elements.
@@ -565,42 +931,6 @@ namespace yapp
          return std::vector<std::uint8_t>(reinterpret_cast<const std::uint8_t *>(this->ptr()),
                                           reinterpret_cast<const std::uint8_t *>(this->eob()));
       }
-
-      /// @brief Validate that the given *pointer* is within range of this memory.
-      ///
-      template <typename U>
-      bool validate_range(const U* pointer) const
-      {
-         if (this->ptr() == nullptr) { return false; }
-         
-         auto me = reinterpret_cast<std::uintptr_t>(pointer);
-         auto start = reinterpret_cast<std::uintptr_t>(this->ptr());
-         auto end = reinterpret_cast<std::uintptr_t>(this->eob());
-
-         return (me >= start && me < end);
-      }
-      
-      /// @brief Validate that the given *pointer* is aligned to an element boundary of the memory.
-      ///
-      template <typename U>
-      bool validate_alignment(const U* pointer) const {
-         // variadic structures align on byte-boundaries, so this pointer will
-         // align by default
-         if constexpr (this->variadic) { return true; }
-         if (this->ptr() == nullptr) { return false; }
-         
-         auto me = reinterpret_cast<std::uintptr_t>(pointer);
-         auto start = reinterpret_cast<std::uintptr_t>(this->ptr());
-         auto alignment = (me - start) % sizeof(T)
-
-         return (alignment == 0);
-      }
-
-      /// @brief Validate with both Memory::validate_range and Memory::validate_alignment that the given *pointer* is
-      /// valid in this memory.
-      ///
-      template <typename U>
-      bool validate_ptr(const U* pointer) const { return (this->validate_range(pointer) && this->validate_alignment(pointer)); }
 
       /// @brief Convert this memory object into a vector.
       ///
@@ -649,9 +979,13 @@ namespace yapp
          auto this_bytes = this->_size;
          auto cast_bytes = fixed_offset + byte_size;
 
-         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
+         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements()); }
 
-         return Memory<U, UIsVariadic, Allocator>(reinterpret_cast<const U*>(&this->ptr()[fixed_offset / sizeof(T)]), byte_size, false, true);
+         auto base_ptr = &this->ptr()[fixed_offset / this->element_size()];
+
+         MemoryManager::GetInstance().relationship(this->pointer.c, this->_size, base_ptr, byte_size);
+
+         return Memory<U, UIsVariadic, Allocator>(reinterpret_cast<const U*>(base_ptr), byte_size, false, true);
       }
 
       /// @brief Create a subsection of this memory at the given *offset* and *size*, with the option
@@ -688,9 +1022,13 @@ namespace yapp
          auto this_bytes = this->_size;
          auto cast_bytes = fixed_offset + byte_size;
 
-         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
+         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements()); }
 
-         return Memory<U, UIsVariadic, Allocator>(reinterpret_cast<U*>(&this->ptr()[fixed_offset / sizeof(T)]), byte_size, false, true);
+         auto base_ptr = &this->ptr()[fixed_offset / this->element_size()];
+
+         MemoryManager::GetInstance().relationship(this->pointer.c, this->_size, base_ptr, byte_size);
+
+         return Memory<U, UIsVariadic, Allocator>(reinterpret_cast<U*>(base_ptr), byte_size, false, true);
       }
 
       /// @brief Create a subsection of this memory at the given *offset* and *size*, with the option
@@ -761,13 +1099,13 @@ namespace yapp
          if (!size_in_bytes) { fixed_offset *= sizeof(T); }
          
          if (this->ptr() == nullptr) { throw NullPointerException(); }
-         if (fixed_offset >= this->_size) { throw OutOfBoundsException(fixed_offset / sizeof(T), this->elements); }
+         if (fixed_offset >= this->_size) { throw OutOfBoundsException(fixed_offset / sizeof(T), this->elements()); }
          if (!this->aligns_with<U, UIsVariadic>() || (size_in_bytes && !this->aligns_with(byte_size))) { throw AlignmentException<T, U>(); }
 
          auto this_bytes = this->_size;
          auto cast_bytes = fixed_offset + byte_size;
 
-         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
+         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements()); }
 
          return std::vector<U>(reinterpret_cast<const U*>(&this->ptr()[fixed_offset / sizeof(T)]),
                                reinterpret_cast<const U*>(&this->ptr()[cast_bytes / sizeof(T)]));
@@ -808,7 +1146,7 @@ namespace yapp
          auto this_bytes = this->_size;
          auto cast_bytes = fixed_offset + reinterpretted.byte_size();
 
-         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements); }
+         if (cast_bytes > this_bytes) { throw OutOfBoundsException(cast_bytes / sizeof(T), this->elements()); }
 
          std::memcpy(&this->ptr()[offset], reinterpretted.ptr(), reinterpretted.byte_size());
       }
@@ -1734,7 +2072,9 @@ namespace yapp
       /// @throw NullPointerException
       ///
       void load_file(const std::string &filename) {
-         std::ifstream fp(filename);
+         std::ifstream fp(filename, std::ios::binary);
+         if (!fp.is_open()) { throw OpenFileFailureException(filename); }
+         
          std::streampos filesize;
 
          fp.seekg(0, std::ios::end);
@@ -1743,8 +2083,8 @@ namespace yapp
 
          auto u8_data = std::vector<std::uint8_t>(filesize);
          u8_data.insert(u8_data.begin(),
-                        std::istream_iterator<std::uint8_t>(fp),
-                        std::istream_iterator<std::uint8_t>());
+                        std::istreambuf_iterator<char>(fp),
+                        std::istreambuf_iterator<char>());
 
          fp.close();
 
@@ -1828,7 +2168,7 @@ namespace yapp
          auto byte_size = size;
          if (!size_in_bytes) { byte_size *= this->element_size(); }
          
-         const auto memory = Memory<T>(pointer, elements);
+         const auto memory = Memory<T, TIsVariadic, Allocator>(pointer, byte_size, false, true);
          this->append<T>(memory);
       }
 
@@ -2099,8 +2439,11 @@ namespace yapp
       /// with the option to interpret the *start* and *end* as bytes (*offset_in_bytes*).
       ///
       /// @throw OutOfBoundsException
+      /// @throw NotAllocatedException
       ///
       void erase(std::size_t start, std::size_t end, bool offset_in_bytes=false) {
+         this->throw_if_unallocated();
+         
          auto fixed_start = start;
          if (!offset_in_bytes) { fixed_start *= this->element_size(); }
 
@@ -2153,6 +2496,8 @@ namespace yapp
 
       /// @brief Pop an element off the end of the memory, if one exists.
       ///
+      /// @throw NotAllocatedException
+      ///
       std::optional<T> pop() {
          if (this->elements() == 0) { return std::nullopt; }
 
@@ -2164,7 +2509,10 @@ namespace yapp
 
       /// @brief Clear this memory of any data.
       ///
+      /// @throw NotAllocatedException
+      ///
       void clear() {
+         this->throw_if_unallocated();
          this->deallocate();
       }
 
@@ -2176,13 +2524,30 @@ namespace yapp
       /// @throw OutOfBoundsException
       /// @throw AlignmentException
       /// @throw NullPointerException
+      /// @throw NotAllocatedException
       ///
       Memory<T> split_off(std::size_t midpoint) {
+         this->throw_if_unallocated();
+         
          auto split_pair = this->split_at(midpoint);
          auto split_memory = Memory<T, TIsVariadic, Allocator>(split_pair.second.ptr(), split_pair.second.size(), true);
          this->resize(midpoint);
 
          return split_memory;
+      }
+
+      std::string to_hex(bool uppercase=false) const {
+         std::stringstream stream;
+         stream << std::hex << std::setw(2) << std::setfill('0');
+
+         if (uppercase) { stream << std::uppercase; }
+
+         auto reinterpretted = this->reinterpret<std::uint8_t>();
+
+         for (auto byte : reinterpretted)
+            stream << reinterpret_cast<unsigned int>(byte);
+
+         return stream.str();
       }
    };
 }

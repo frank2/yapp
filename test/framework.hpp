@@ -60,3 +60,14 @@
       LOG_FAILURE("Got exception: " << e.what());\
       result += 1;\
    }\
+
+#define PROCESS_RESULT(test) \
+   try {\
+      result += test();\
+   }\
+   catch (std::exception &e) {\
+      LOG_FAILURE("Unhandled exception while running test: " << e.what()); \
+      result += 1;\
+   }\
+   LOG_INFO(result << " errors so far." << std::endl);   \
+   
